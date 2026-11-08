@@ -1,8 +1,9 @@
-# Logic Benchmark — the `recon` spec-fidelity benchmark
+# SpecTrapBench — the `recon` spec-fidelity benchmark
 
-> **Naming note:** despite the folder name, this is not a logic-reasoning test.
-> It measures how faithfully a model implements an exact written specification
-> that contains deliberate traps. See [Naming](#naming) at the bottom.
+> **SpecTrapBench** scores how faithfully a model implements an exact written
+> specification that contains deliberate traps — not formal logical reasoning.
+> The name is deliberate: the difficulty is *reading*, not *reasoning*. See
+> [Why this name](#why-this-name).
 
 This repo holds the operator kit for a head-to-head benchmark: give a model one
 task file and see whether it builds a small, working application whose behaviour
@@ -193,20 +194,19 @@ will benchmark only one model:
 curl -s -m 6 http://192.168.1.183:18004/v1/models
 ```
 
-## Naming
+## Why this name
 
-"Logic Benchmark" understates and misdescribes the test. It scores specification
-fidelity under deliberate traps — careful reading, exact arithmetic, correct
-edge cases — not formal logical reasoning. "LogicBench" also already exists as
-an ACL 2024 logical-reasoning benchmark, so the name collides with something the
-test is not.
+The kit was originally filed as "Logic Benchmark". That name described the
+wrong thing: this test scores **specification fidelity under deliberate traps**
+— careful reading, exact arithmetic, correct edge cases — not formal logical
+reasoning. It also collided with [LogicBench](https://arxiv.org/abs/2404.15522),
+an existing ACL 2024 logical-reasoning benchmark.
 
-Names that fit better, roughly in preference order:
+**SpecTrapBench** (folder `spec-trap-bench`) names both halves of what is
+measured: the exact specification and the eleven planted traps. The runbook
+calls them traps throughout, and the score moves precisely on whether a model
+read the spec or inferred around it.
 
-- **SpecTrapBench** / `spec-trap-bench` — most literal: specification fidelity,
-  deliberate traps.
-- **ReconBench** — names the artifact under test and is unambiguous.
-- **ContractBench** — the eleven requirements are an output/behaviour contract.
-- **FidelityBench** — what is actually measured.
-
-Keep the folder name if you like it, but call the test by what it measures.
+Alternatives that were considered and rejected: *ReconBench* (names the
+artifact but not the method), *ContractBench* (accurate but generic), and
+*FidelityBench* (the metric, not the test).
