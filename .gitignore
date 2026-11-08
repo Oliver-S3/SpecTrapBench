@@ -1,0 +1,18 @@
+# Benchmark run artifacts — never commit a model's workspace into the kit repo
+*.db
+*.sqlite
+*.sqlite3
+report.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
