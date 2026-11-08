@@ -98,9 +98,11 @@ anything, and check what the model's tests actually feed the parser.
 
 ## Fixture set
 
-Generate fixtures deterministically (explicit line endings, explicit BOM) and
-keep them outside every scratch directory; copy them in so each run sees
-byte-identical input. Don't hand-edit them.
+This kit ships no fixture files — build them from these descriptions, once,
+deterministically (explicit line endings, explicit BOM). Keep them outside every
+scratch directory and copy them in so each run sees byte-identical input; don't
+hand-edit them. Scoring is done by you (or a grader model) against this sheet;
+there is no scoring script in the repo.
 
 ```
 penny.csv        1000 transactions of 0.01, same date

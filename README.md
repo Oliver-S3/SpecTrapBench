@@ -138,17 +138,23 @@ whether later transactions can claim them depends on processing order. Handling
 both in isolation but not together is the most interesting failure this task
 produces.
 
-## The fixtures
+## Fixtures and scoring — bring your own
 
-The fixture set is kept **outside** this repo and outside every scratch
-directory, then copied in, so every model sees byte-identical input. Build it
-once, deterministically — explicit line endings, explicit BOM — and reuse it.
-`bench-app-rubric.md` lists the nine cases and the exact expected outputs.
+This repo is a **kit, not a runner**: it ships no fixture files and no scoring
+harness. You build the nine cases yourself from the descriptions below, grade
+the finished code against `bench-app-rubric.md`, and record the result. Nothing
+here runs a model or auto-scores a run.
 
-The short version: `penny.csv`, `alloc.csv`, `dirty.csv`, `baddate.csv`,
-`rates.csv`, `subset.csv`, `refund.csv`, `dupes.csv`, `aging.csv`, with the two
-input shapes from the task (`transactions.csv`, `invoices.csv`) and a
-`rates.csv` of `date,currency,rate_to_usd`.
+Build the fixtures once, deterministically — explicit line endings, explicit
+BOM — and keep them **outside** every scratch directory, copying one case in at
+a time so every model sees byte-identical input. Hand-editing them breaks the
+comparability the checks rely on.
+
+The nine cases: `penny.csv`, `alloc.csv`, `dirty.csv`, `baddate.csv`,
+`rates.csv`, `subset.csv`, `refund.csv`, `dupes.csv`, `aging.csv` — each an
+input pair (`transactions.csv` + `invoices.csv`, plus `rates.csv` where FX is
+involved) using the shapes defined in the task. The rubric lists what each case
+must contain and the exact expected output.
 
 ## Publishing your own results
 

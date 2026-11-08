@@ -116,10 +116,12 @@ interesting failure this task produces.
 
 ## The fixture set
 
-Keep fixtures **outside** every scratch directory and copy them in, so each run
-sees byte-identical input. Generate them deterministically (explicit line
-endings, explicit BOM) rather than hand-editing. The rubric lists the nine
-cases, what each contains, and the exact expected output.
+This kit ships no fixtures or scoring harness — you provide both. Build the nine
+cases below once, deterministically (explicit line endings, explicit BOM), from
+the descriptions in the rubric; then keep them **outside** every scratch
+directory and copy them in, so each run sees byte-identical input. Grading is
+done by you (or a grader model) against `bench-app-rubric.md`, not by a script
+in this repo.
 
 ```
 penny.csv        1000 transactions of 0.01, same date
