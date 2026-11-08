@@ -1,212 +1,242 @@
-# SpecTrapBench — the `recon` spec-fidelity benchmark
+# SpecTrapBench
 
-> **SpecTrapBench** scores how faithfully a model implements an exact written
-> specification that contains deliberate traps — not formal logical reasoning.
-> The name is deliberate: the difficulty is *reading*, not *reasoning*. See
-> [Why this name](#why-this-name).
+**A specification-fidelity benchmark for local LLMs.** Give a model one task
+file and see whether it builds the exact thing the spec says — or a plausible,
+working, wrong approximation.
 
-This repo holds the operator kit for a head-to-head benchmark: give a model one
-task file and see whether it builds a small, working application whose behaviour
-matches eleven exact requirements. Models that "read carelessly produce working,
-plausible, wrong code" — that gap is what the benchmark measures.
+Most coding benchmarks reward volume or algorithmic cleverness. SpecTrapBench
+does neither. It hands the model a deliberately exact specification of a small
+application (`recon`, a payment-reconciliation CLI, ~500–700 lines of Python
+using only the standard library) and scores whether the *reading* was faithful.
+The difficulty is concentrated in **eleven planted traps**, each with exactly one
+defensible answer.
 
-Three files, three different audiences. Keeping them straight is the whole
-point of the setup.
+A careless reader produces code that runs, looks right, and is wrong in ways
+that matter in production: floats on a money path, banker's rounding, guessed
+date formats, idempotency keyed on the wrong column, a refund that settles an
+invoice, an aging report that reads the clock. That gap — *working, plausible,
+wrong* — is what this benchmark measures.
 
-| File | Safe to show the model? | Purpose |
-|---|---|---|
-| [`bench-app-task.md`](bench-app-task.md) | **Yes — and only this** | The task spec. Build `recon`, a double-entry payment reconciliation CLI in Python 3.11+ using only the standard library. |
-| [`bench-app-prompt.md`](bench-app-prompt.md) | No | Operator runbook. How to launch a run, what to record, and why each trap discriminates. |
-| [`bench-app-rubric.md`](bench-app-rubric.md) | No | Grading sheet: fixed expected values, per-requirement checks, and results so far. |
+## Why local models
 
-The runbook names every intended trap and the rubric contains the expected
-answers. A model that reads either is **contaminated** and the run is void.
+Small and self-hosted models (7B–70B, often quantized) are exactly where
+specification fidelity breaks first:
 
-## What the task asks for
+- **Long specs get lossy.** Eleven requirements at 16k–64k context degrade into
+  "build a CSV-to-SQLite CLI", and the details get regenerated from priors
+  instead of read.
+- **Tool-calling is shakier.** More failed turns, more re-reads, more
+  self-reported success without actually running anything.
+- **Priors win.** Local models have strong, familiar patterns for "money",
+  "CSV", "dates", and "dedupe" — and every one of those priors is deliberately
+  wrong here.
 
-One self-contained build: `recon`, with modules for money, parsing, SQLite
-persistence, matching, and reporting, plus unit tests and a README. The full
-contract is in [`bench-app-task.md`](bench-app-task.md); the short version:
+That makes the benchmark useful for choosing local weights, quantization levels,
+or reasoning settings: the scores move on reading fidelity, not on luck.
 
-- amounts in integer minor units (no floats anywhere on the value path);
-- half-up-away-from-zero rounding, with pro-rata allocations that sum exactly;
-- tolerant CSV ingestion (BOM, CRLF, quoted commas, `=`-prefixed literals);
-- explicit date-format flag, impossible dates rejected with file/line/value;
-- FX conversion using the most recent rate on or before the invoice `issued` date;
-- deterministic matching in `(date, amount, id)` order, single invoice first,
-  then subsets of 2–4 invoices inside a ±3-day window, with fixed tie-breaks;
-- refunds that reverse a match and never settle an invoice;
-- idempotent import keyed on content, not `id` or row order;
-- atomic import and atomic `--out` writes;
-- aging buckets from an explicit `--as-of` (the only clock in the program);
-- clean stdout/stderr split, exit codes 0/1/2, deterministic output.
+## What a run looks like
 
-The size budget is deliberate: roughly 500–700 lines excluding tests, so the
-difficulty sits in the eleven traps rather than volume.
+One run = one model, one scratch directory, one task file, one prompt.
 
-## How to run a session
-
-Follow [`bench-app-prompt.md`](bench-app-prompt.md) exactly:
-
-1. `cd` into an empty scratch directory — **one per model**, e.g.
-   `C:\Coding\bench\qwenfp8\` and `C:\Coding\bench\ds4\`. Do not run from this
-   project folder.
-2. Copy **only** `bench-app-task.md` into that directory.
-3. Send exactly one first message and nothing else:
+1. **Serve the model** with a client that can write files and run shell commands
+   (see [Serving a local model](#serving-a-local-model)). Agentic clients —
+   Cline, Roo Code, OpenHands, Aider, Continue — are the intended vehicle.
+2. **Create an empty scratch directory**, one per model, e.g.
+   `bench/my-model/`. Do not run from this repo folder.
+3. **Copy only `bench-app-task.md`** into it. Nothing else.
+4. **Send exactly one message** and nothing more:
 
    > Read bench-app-task.md and build what it specifies.
 
-4. Afterwards, answer nothing except "continue" if the model stops early. Every
-   clarifying question it asks is recorded as a data point, not resolved.
-5. Record wall clock, turn count, tool-call count, failed/retried turns, whether
-   thinking blocks appeared, and whether it claimed success without running it.
+5. If the model stops early, reply with **"continue"** and nothing else. Every
+   clarifying question it asks is a data point, not something to resolve.
+6. **Record process metrics** (wall clock, turns, tool calls, failed turns,
+   thinking blocks, whether it claimed success without running anything).
+7. **Score it against `bench-app-rubric.md`** — never against the model's own
+   passing test suite.
 
-**Contamination check:** before scoring, inspect the model's tool calls. If it
-read `bench-app-prompt.md` or `bench-app-rubric.md`, discard the run. A model
-that announces it is "setting up benchmark infrastructure" has read the wrong
-file — stop and restart clean.
+## Serving a local model
 
-## How scoring works
+Any OpenAI-compatible endpoint works; the client matters more than the server.
+Point the client at the endpoint, give it file-write and shell tools, and make
+sure the context window is large enough to hold the task file plus the code it
+is writing (16k is workable, 32k–64k is comfortable).
 
-Settled method (2026-08-11). Total is out of **28**.
+| Backend | Endpoint | Notes |
+|---|---|---|
+| **vLLM** | `http://localhost:8000/v1` | `vllm serve <model> --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser hermes` for tool use |
+| **llama.cpp** | `http://localhost:8080/v1` | `llama-server -m model.gguf --port 8080 --jinja` (template must emit tool calls) |
+| **Ollama** | `http://localhost:11434/v1` | `ollama serve`; pick a tool-capable model tag |
+| **LM Studio** | `http://localhost:1234/v1` | enable the local server; tool use varies by model |
+| **LiteLLM proxy** | `http://localhost:4000/v1` | one config, many models; useful when comparing several at once |
+
+Settings that matter, and belong in the run record:
+
+- **Context / max tokens** — a truncated run is a void run; raise the cap.
+- **Temperature** — 0 or near it; this is not a creativity test.
+- **Reasoning effort** — where the backend supports it (`low`/`medium`/`high`).
+- **Thinking blocks** — some transports expose them, some drop them. Note
+  which; it changes wall-clock comparisons.
+- **Quantization** — name the weights in the result (`Q4_K_M`, FP8, …).
+
+Before launching, confirm the server is up: `curl http://localhost:8000/v1/models`.
+
+## What it measures
+
+Every run is scored out of **28**:
 
 | Part | What | Points |
 |---|---|---|
-| A | Gate: does it run at all | Pass/fail — **never points** |
-| B | 11 requirements × 2 points each | 22 |
-| C | 6 quality checks × 1 point each | 6 |
+| A | Gate: does it run at all | Pass/fail — never points |
+| B | 11 requirements × 2 | 22 |
+| C | 6 quality checks × 1 | 6 |
 
-**Part A (gate):** `python -m unittest discover` runs without import/syntax
-errors, `recon import` completes on the fixtures, `reconcile` produces output,
-and there are zero third-party imports. A model that fails the gate still gets
-read-and-scored on Part B, but the failure is reported beside the score. Part A
-is checked **last**, after Part B, so a plausible-looking program that doesn't
-actually work cannot hide behind its traps score.
+Part A is checked **last**: `python -m unittest discover` runs clean,
+`recon import` succeeds on the fixtures, `reconcile` produces output, and there
+are zero third-party imports. A model that passes Part B on code that cannot
+read the specified input is a failure, and the score says so.
 
-**Part B** is scored per requirement, not per check. The rubric's `2b`/`4b`/`6b`
-rows are evidence *inside* their parent requirement, weighted 1 point each so
-the parent still totals 2. Score 2 = correct, 1 = defensible but wrong in an
-edge case, 0 = wrong or absent.
+Part B is scored **per requirement** against fixed expected values, not against
+the model's tests. Score 2 = correct, 1 = defensible but wrong in an edge case,
+0 = wrong or absent.
 
-**Part C:** "Design decisions" section lists real ambiguities, line count within
-500–700 excluding tests, module boundaries respected, errors name
-file + line + value, two identical runs are byte-identical (including `--json`),
-and no dead code or unused flags beyond `--fail-after`.
+Two checks catch defects that a model's own green test suite hides:
 
-Do **not** accept the model's own passing test suite as the score. Score against
-the rubric's fixed expected values. Two checks that catch otherwise-invisible
-defects:
-
-- **Cross a process boundary.** Run `import`, `reconcile`, then `report` as three
-  separate invocations and check they agree. Scoring matching from one in-process
-  session is the exact blind spot that let one run's own 47/47 suite go green
+- **Cross a process boundary.** Run `import`, `reconcile`, and `report` as three
+  separate invocations and see whether they agree. Scoring matching from one
+  in-process session is the exact blind spot that let one run's 47/47 suite pass
   while `reconcile` persisted nothing.
 - **Check that correct code is reachable.** Grep each requirement's helper for
-  call sites. Existence is not use — one run implemented the correct
-  most-recent-rate rule and never called it.
+  call sites. One run implemented the correct most-recent-rate rule and never
+  called it.
 
-Also check what the model's tests *feed* the parser. One run scored 11
-requirements while being unable to read the specified CSV shape, because its
-tests used a format it invented.
+Also inspect **what the model's tests feed the parser**: a run can pass eleven
+requirements while being unable to read the specified CSV shape, because its own
+tests invented a format it likes better.
 
-## The eleven traps and their expected values
+## The eleven traps and what they expose
 
-Each trap has exactly one defensible answer. Full fixtures and per-row checks
-live in [`bench-app-rubric.md`](bench-app-rubric.md).
+Each trap has exactly one defensible answer. This is the part that matters for
+local models — every row is a place where a "sensible default" is wrong.
 
-| # | Trap | Expected check | Common failure |
+| # | Requirement | Expected | What it exposes |
 |---|---|---|---|
-| 1 | integer minor units | 1000 rows of `0.01` → exactly `10.00` | `float`; `0.01 * 1000 != 10.00` |
-| 2 | half-up + residual placement | `100.00` over 3 equal invoices → `33.34, 33.33, 33.33`; `-2.345` → `-2.35` | banker's `round()`; allocations that don't sum |
-| 3 | CSV edges | BOM + CRLF + `="+1,234"` parses, field stays literal | BOM in header name; `=` coerced |
-| 4 | flag over inference | `03/04/2026` under `iso` is a hard error; `2026-02-29` errors naming file+line+value | date guessing; silent coercion to Mar 1 |
-| 5 | rate as of *issued* | invoice issued `03-10`, rates on `03-01`/`03-15` → uses `03-01` | exact-date lookup; transaction date |
-| 6 | ordering + subset-sum + tie-breaks | reversed file order gives identical result; a 2-invoice solution beats a 3-invoice one | file-order greedy; single-invoice only |
-| 7 | refund never settles | refund of a settled transaction returns invoices to open | refund matched as a payment |
-| 8 | content-keyed dedup | import twice → `0 inserted`; two identical rows in one file stay two | dedup on `id`; re-insert on second import |
-| 9 | atomic import / atomic write | `--fail-after 3` leaves the row count unchanged | per-row commits; in-place report |
-| 10 | `--as-of` is the only clock | `due = as-of - 30` → `0-30`; `-31` → `31-60` | `date.today()` scattered through code |
-| 11 | exit codes + stream split | unmatched present → exit `1`, report on stdout only | everything on stdout; exit 0 always |
+| 1 | Integer minor units | 1000 rows of `0.01` → exactly `10.00` | Float instinct on a money path; `0.01 * 1000 != 10.00` |
+| 2 | Half-up rounding + allocation residual | `100.00` over 3 → `33.34, 33.33, 33.33`; `-2.345` → `-2.35` | Python's banker's `round()`; allocations that don't sum |
+| 3 | CSV edges | BOM + CRLF + `"+1,234"` parses; field stays literal | "Clean the data" reflexes: BOM in header name, `=` coerced or stripped |
+| 4 | Flag over inference | `03/04/2026` under `iso` is a hard error; `2026-02-29` names file+line+value | Date guessing (`dateutil`-style) and silent coercion to Mar 1 |
+| 5 | Rate as of *issued*, most recent on/before | invoice `03-10`, rates `03-01`/`03-15` → uses `03-01` | Exact-date lookup; using the transaction date instead |
+| 6 | Deterministic order + subset-sum + tie-breaks | reversed file order gives identical output; 2-invoice solution beats 3-invoice | File-order greedy; single-invoice-only matching |
+| 7 | Refund reverses, never settles | refund of a settled transaction returns invoices to open | The "refund = negative payment" prior; normalizing text the spec says must match exactly |
+| 8 | Content-keyed dedup | import twice → `0 inserted`; two identical rows in one file stay two | Dedup on `id` or row order; collapsing duplicates within a file |
+| 9 | Atomic import + atomic write | `--fail-after 3` leaves the row count unchanged | Per-row commits; in-place report writes |
+| 10 | `--as-of` is the only clock | `due = as-of - 30` → `0-30`; `-31` → `31-60` | `date.today()` scattered through the code; tests that only pass today |
+| 11 | Exit codes + stream split | unmatched present → exit `1`, report on stdout only | Logging to stdout; exiting `0` always |
 
 Requirements 6 and 7 interact on purpose: a refund returns invoices to open, and
 whether later transactions can claim them depends on processing order. Handling
 both in isolation but not together is the most interesting failure this task
 produces.
 
-## Results so far
+## The fixtures
 
-All scores out of 28. Runs restated on 2026-08-11; rankings did not change.
+The fixture set is kept **outside** this repo and outside every scratch
+directory, then copied in, so every model sees byte-identical input. Build it
+once, deterministically — explicit line endings, explicit BOM — and reuse it.
+`bench-app-rubric.md` lists the nine cases and the exact expected outputs.
 
-| Run | Model | Part B | Part C | Total | Gate |
-|---|---|---|---|---|---|
-| 3 | DS4 | 20 | 4 | 24 / 28 | passed |
-| 8 | Qwen3.8-27B (NVFP4+MTP, medium, 65536 cap) | 20 | 4 | 24 / 28 | passed (`unittest discover` needs `-s tests`) |
-| 5 | DS4 q2 + DSpark | 19 | 4 | 23 / 28 | passed |
-| 6 | DS4 q2 + DSpark | 20 | 3 | 23 / 28 | 3 of 4 — invented a no-header CSV format |
-| 7 | Qwen3.8-27B (NVFP4+MTP, xhigh) | 19 | 3 | 22 / 28 | FAILED — assumes integer ids |
-| 1 | qwen FP8 | 14 | 4 | 18 / 28 | failed — `reconcile` persists nothing |
-| 4 | qwen FP8 | 13 | 3 | 16 / 28 | 3 of 4 — `reconcile` prints nothing |
+The short version: `penny.csv`, `alloc.csv`, `dirty.csv`, `baddate.csv`,
+`rates.csv`, `subset.csv`, `refund.csv`, `dupes.csv`, `aging.csv`, with the two
+input shapes from the task (`transactions.csv`, `invoices.csv`) and a
+`rates.csv` of `date,currency,rate_to_usd`.
 
-### Reading the results
+## Publishing your own results
 
-- Runs 3, 5, and 6 are the **same model on the same weights** scoring 24, 23,
-  23. Treat anything under ~2 points as no difference; that is the run-to-run
-  noise floor. Medium effort is still untested (run 6's setting was never
-  confirmed — thinking was 54% of output against run 5's 56%).
-- Where points move is more informative than totals. Run 6 fixed trap 3 (raw
-  description) and trap 8 (duplicate ids) to reach Part B 20/22, then lost the
-  aging edge case, the Design-decisions section, and the gate.
-- The one defect all three DS4 runs share is requirement 7. It surfaced in three
-  different places (`store.py:210`, `parsing.py:97`, `matching.py:101`): the
-  model normalizes before a comparison the spec says must be on identical text.
-- Runs 3 and 4 are the controlled pair (same client, transport, and ceiling;
-  only the model differs). DS4 wins by 9 points. Run 1's `hosted_vllm/` plumbing
-  cost qwen ~2 points, not 11 — the gap is the model, not the transport.
-- Do not compare raw wall clock across models. DS4 runs `anthropic/`
-  pass-through and keeps thinking blocks; qwen runs `hosted_vllm/` and loses
-  them. At 3.6 vs 46 tok/s, the meaningful number is **points per turn**, not
-  points per minute. Turns were not captured for runs 3 and 4, so that number
-  does not exist for them.
+This repo doesn't publish a model ranking. The score is a property of *your*
+weights, quantization, backend, context cap, and client settings — not of the
+benchmark — so the useful result is the one you measure yourself. Record it in
+this shape:
 
-## Repo layout and external dependencies
+| Run | Model + weights | Backend / client | Context cap | Part B | Part C | Total | Gate |
+|---|---|---|---|---|---|---|---|
+| 1 | *(model id, quantization)* | *(vLLM / Cline, …)* | *(tokens)* | /22 | /6 | /28 | passed / failed |
 
-This folder contains the docs only; fixtures and harness live outside so both
-models see byte-identical input:
+Include the failing checks and quote the evidence (the wrong `33.34` split, the
+`reconcile` that printed nothing in a new process, the helper that exists but is
+never called). A failed gate is a legitimate result — report it beside the
+score, not folded into it.
 
-- `C:\Coding\bench\fixtures\make-fixtures.py` — generates all fixtures
-  deterministically (explicit line endings and BOM). Regenerate, don't hand-edit.
-- `C:\Coding\bench\score-qwen\score.py` plus `probe2/3/4.py` — scoring harness.
-  Repoint only `CODE`; `PEEK` must stay on the harness directory.
+Two cautions when comparing your own runs:
 
-Fixture set: `penny.csv`, `alloc.csv`, `dirty.csv`, `baddate.csv`, `rates.csv`,
-`subset.csv`, `refund.csv`, `dupes.csv`, `aging.csv`.
+- Expect **~2 points of run-to-run noise** on the same weights and settings.
+  Anything smaller is not a difference.
+- Compare **points per turn**, not wall-clock seconds. Transports differ in
+  whether thinking blocks are preserved, and local hardware varies by an order
+  of magnitude in decode speed.
 
-**Harness cost is real:** probes have had to be rewritten for every run so far,
-because table and column names differ each time. Only `score.py` and the
-fixtures genuinely port. Expect a fresh `peekN.py` per run. Also check
-`main()`'s signature before scoring — one run's `main()` took no `argv` and read
-`sys.argv` directly, so a runner passing a list looked like a broken app.
+## Repo layout
 
-**Before a run:** `ds4-plan` was down as of 2026-08-08 — check it first or you
-will benchmark only one model:
+| File | Show to the model? | What it is |
+|---|---|---|
+| [`bench-app-task.md`](bench-app-task.md) | **Yes — and only this** | The task spec: build `recon`, Python 3.11+, standard library only |
+| [`bench-app-prompt.md`](bench-app-prompt.md) | No | Operator runbook: how to launch a run, what to record, why each trap discriminates |
+| [`bench-app-rubric.md`](bench-app-rubric.md) | No | Grading sheet: fixed expected values, per-requirement checks, results template |
+| [`bench-app-grading.md`](bench-app-grading.md) | No | Isolation setup: folder layout, operator grading, grading with a second model |
+| `README.md` | No | This overview |
 
-```powershell
-curl -s -m 6 http://192.168.1.183:18004/v1/models
-```
+**Only `bench-app-task.md` goes to the model.** Every other file in this repo —
+including this README, the runbook, the rubric, and the grading guide — names
+intended traps or expected values and is operator/grading material. A model that
+reads any of them is **contaminated** and the run is void.
+
+## Keeping operator files away from the model
+
+The tested model gets **one folder, one file**: an empty run directory
+containing only `bench-app-task.md`. Everything else — this README, the runbook,
+the rubric, the fixtures, and the probe harness — stays outside the run
+directory and is opened only after the run finishes (or, for grading, in a
+separate grading folder).
+
+Two supported setups, both described in
+[`bench-app-grading.md`](bench-app-grading.md):
+
+- **Operator grading** — a human scores the finished code against the rubric.
+- **Second-model grading** — copy the produced tree into `grading/<model>/` and
+  launch a grader agent there with the rubric and fixtures. The tested model
+  never sees them; a different model for the grader avoids self-preference bias.
+
+Practical rules: don't run the benchmark inside this repo folder (parent
+directories and repo-wide instruction files get auto-read by some clients);
+disable network access for the tested model; and never paste rubric contents
+into the chat.
+
+## Contamination
+
+Before scoring, inspect the model's tool calls. If it read any repo file other
+than `bench-app-task.md` — the runbook, the rubric, this README, or the grading
+guide — discard the run. Keeping each scratch directory to *only*
+`bench-app-task.md` is the cheapest prevention — do not run the benchmark from
+this repo folder.
+
+A model that announces it is "setting up benchmark infrastructure" has read the
+wrong file: it saw operator material, not the task. Stop and restart clean.
+
+## Contributing a run
+
+A useful run report includes: model id and weights (quantization), backend and
+client, context cap, temperature, reasoning effort, the recorded process
+metrics, and the Part A/B/C scores with the failing checks quoted. Runs with a
+failed gate are welcome — label the gate result beside the score. See
+`bench-app-rubric.md` for the format.
 
 ## Why this name
 
-The kit was originally filed as "Logic Benchmark". That name described the
-wrong thing: this test scores **specification fidelity under deliberate traps**
-— careful reading, exact arithmetic, correct edge cases — not formal logical
+The kit was originally filed as "Logic Benchmark". That name described the wrong
+thing: this test scores **specification fidelity under deliberate traps** —
+careful reading, exact arithmetic, correct edge cases — not formal logical
 reasoning. It also collided with [LogicBench](https://arxiv.org/abs/2404.15522),
 an existing ACL 2024 logical-reasoning benchmark.
 
-**SpecTrapBench** (folder `spec-trap-bench`) names both halves of what is
-measured: the exact specification and the eleven planted traps. The runbook
-calls them traps throughout, and the score moves precisely on whether a model
-read the spec or inferred around it.
-
-Alternatives that were considered and rejected: *ReconBench* (names the
-artifact but not the method), *ContractBench* (accurate but generic), and
-*FidelityBench* (the metric, not the test).
+**SpecTrapBench** names both halves of what is measured: the exact specification
+and the eleven planted traps. The score moves precisely on whether a model read
+the spec or inferred around it.

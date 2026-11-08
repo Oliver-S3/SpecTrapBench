@@ -1,25 +1,34 @@
-# Grading sheet — `bench-app-prompt.md`
+# Grading sheet — SpecTrapBench
 
-The model never sees this file. Score each row independently; don't let a model's
-own passing test suite substitute for a check here.
+The model never sees this file — or any repo file other than
+`bench-app-task.md` (the README, runbook, and grading guide also give away traps
+and expected values). Score each row independently; don't let a model's own
+passing test suite substitute for a check here.
+
+Total is out of **28**: Part A is a gate (pass/fail, never points), Part B is
+11 requirements × 2 = 22, Part C is 6 quality checks × 1 = 6, Part D is recorded
+but not scored.
 
 ## Part A — does it run at all (gate)
 
-| Check | qwen FP8 | DS4 |
+Check this **last**, after Part B.
+
+| Check | Run A | Run B |
 |---|---|---|
 | `python -m unittest discover` runs without import/syntax error | | |
 | `recon import ...` completes on the fixtures below | | |
 | `recon reconcile` produces output | | |
-| Zero third-party imports (`grep -rE '^\s*(import\|from) ' | reject non-stdlib`) | | |
+| Zero third-party imports (`grep -rE '^\s*(import\|from) '` and reject non-stdlib) | | |
 
-A model failing the gate still gets scored on Part B by reading the code.
+A model failing the gate still gets scored on Part B by reading the code — but
+the gate failure is reported beside the score, never folded into it.
 
 ## Part B — the 11 traps, 2 points each
 
 Score **2** = correct, **1** = attempted and defensible but wrong in an edge
 case, **0** = wrong or absent. Max 22.
 
-| # | Exact check | Expected | qwen | DS4 |
+| # | Exact check | Expected | Run A | Run B |
 |---|---|---|---|---|
 | 1 | 1000 rows of `0.01` | exactly `10.00`; no `float` in any value path | | |
 | 2 | `100.00` over 3 equal invoices | `33.34, 33.33, 33.33`, sum `100.00` | | |
@@ -41,10 +50,10 @@ halves; weight each at 1 point so the requirement still totals 2.)
 
 ## Part C — quality, 1 point each (max 6)
 
-| Check | qwen | DS4 |
+| Check | Run A | Run B |
 |---|---|---|
 | "Design decisions" section actually lists real ambiguities it resolved | | |
-| Line count within 500-700 excluding tests | | |
+| Line count within 500–700 excluding tests | | |
 | Module boundaries as specified (matching logic not in `cli.py`) | | |
 | Errors name file + line + value, not just a traceback | | |
 | Determinism: two identical runs byte-identical (incl. `--json`) | | |
@@ -52,44 +61,46 @@ halves; weight each at 1 point so the requirement still totals 2.)
 
 ## Part D — process (record, don't score)
 
-|  | qwen | DS4 |
+| | Run A | Run B |
 |---|---|---|
 | Wall clock | | |
 | Turns / tool calls | | |
-| Failed or retried turns (BUGS.md #1) | | |
-| Thinking blocks present (`anthropic/` yes, `hosted_vllm/` no) | | |
+| Failed or retried turns | | |
+| Thinking blocks present | | |
 | Asked clarifying questions despite being told not to | | |
 | Claimed something worked without running it | | |
 
-Note the asymmetry before comparing wall clock: DS4 runs `anthropic/`
-pass-through and keeps thinking blocks; qwen runs `hosted_vllm/` and loses them.
-At 3.6 vs 46 tok/s a raw time comparison says nothing about quality — the
-interesting number is **points per turn**, not points per minute.
+Note the asymmetry before comparing wall clock: transports differ in whether
+thinking blocks are preserved, and decode speed varies by orders of magnitude
+across local hardware and quantization. A raw time comparison says nothing about
+quality — the interesting number is **points per turn**, not points per minute.
+Record turns for every run so that number exists.
 
 ## Part A is not a formality — check it last, after Part B
 
-Part B can be scored high on a program that doesn't work. Run 1 scored 16/22 on
+Part B can be scored high on a program that doesn't work. One run scored 16/22 on
 traps while `reconcile` persisted nothing: it printed `Matched: 1`, and `report`
 in a *new process* called the same transaction unmatched. Two checks catch this
 class of defect and neither is a trap:
 
 - **Cross a process boundary.** Run `import`, `reconcile`, then `report` as three
   separate invocations and ask whether they agree. Never score matching from a
-  single in-process session — that's exactly the blind spot that made run 1's own
-  47/47 suite green.
-- **Check that correct code is reachable.** Run 1 implemented trap 5's
+  single in-process session — that is exactly the blind spot that made one run's
+  own 47/47 suite green.
+- **Check that correct code is reachable.** One run implemented trap 5's
   most-recent-rate rule correctly in `Store.get_exchange_rate` and never called
   it. Grep each requirement's helper for call sites; existence isn't use.
 
-## Fixture set — BUILT, reuse it
+**Add a gate row for the input contract.** One run passed 11 requirements while
+being unable to read the specified file shape, because its own tests fed it the
+format it invented. Check that `import` succeeds on a fixture *before* scoring
+anything, and check what the model's tests actually feed the parser.
 
-`C:\Coding\bench\fixtures\make-fixtures.py` generates all of these
-deterministically (explicit line endings, explicit BOM). Regenerate; don't
-hand-edit. Harness: `C:\Coding\bench\score-qwen\score.py` plus `probe2/3/4.py`
-— repoint `CODE` at the run being scored. A CLI-only pass is not sufficient.
+## Fixture set
 
-Keep these outside both scratch dirs and copy them in, so the two runs see
-byte-identical input:
+Generate fixtures deterministically (explicit line endings, explicit BOM) and
+keep them outside every scratch directory; copy them in so each run sees
+byte-identical input. Don't hand-edit them.
 
 ```
 penny.csv        1000 transactions of 0.01, same date
@@ -103,72 +114,53 @@ dupes.csv        two rows identical under the dedup key, differing ids
 aging.csv        invoices due at as-of -30, -31, -60, -61, -90, -91
 ```
 
-Final, all runs on the reconciled method (see below) — `bench-results.md` has the
-per-requirement tables. Run 2 was void and never produced code.
+Each case is an import pair — `transactions.csv` and `invoices.csv` — plus
+`rates.csv` where FX is involved. Keep the file names stable across models.
 
-| Run | Model | Part B | Part C | Total | Gate |
-|---|---|---|---|---|---|
-| 3 | DS4 | 20 | 4 | **24 / 28** | passed |
-| 8 | Qwen3.8-27B (NVFP4+MTP, medium, 65536 cap) | 20 | 4 | **24 / 28** | passed (caveat: `unittest discover` needs `-s tests`) |
-| 5 | DS4 q2 + DSpark | 19 | 4 | **23 / 28** | passed |
-| 6 | DS4 q2 + DSpark | 20 | 3 | **23 / 28** | **3 of 4** — invented a no-header CSV format; all 23 fixtures fail at import |
-| 7 | Qwen3.8-27B (NVFP4+MTP, xhigh) | 19 | 3 | **22 / 28** | **FAILED** — `int(rec["id"])` assumes integer ids; every string-id fixture fails at import |
-| 1 | qwen FP8 | 14 | 4 | **18 / 28** | **failed** — `reconcile` persists nothing |
-| 4 | qwen FP8 | 13 | 3 | **16 / 28** | **3 of 4** — `reconcile` prints nothing |
-
-**Runs 3, 5 and 6 are the same model on the same weights**: 24, 23, 23. Runs 5 and 6
-are also the same *configuration* — run 6 was meant to be the `reasoning_effort:
-medium` pair but the setting was never confirmed, and the log shows thinking at 54%
-of output against run 5's 56%, i.e. **unchanged**. So this is a three-sample read on
-the run-to-run noise floor: **treat anything under ~2 points as no difference.**
-Medium effort remains **untested**.
-
-**Where the points move is more informative than the totals.** Run 6 fixed the raw-
-description line that cost runs 3 and 5 (trap 3) and run 5's duplicate-id bug (trap
-8), reaching Part B 20/22 — then lost the aging edge case, the "Design decisions"
-section, and the gate. The *only* defect all three DS4 runs share is requirement 7,
-and it has surfaced in three different places (`store.py:210`, `parsing.py:97`,
-`matching.py:101`): the model keeps normalizing before a comparison the spec says
-must be on *identical* text.
-
-**Add a gate row for the input contract.** Run 6 passed 11 requirements while being
-unable to read the specified file shape, because its own tests fed it the format it
-invented. Check that `import` succeeds on a fixture *before* scoring anything, and
-check what the model's tests actually feed the parser.
-
-**Runs 3 and 4 are the controlled pair**: both via Cline direct to the Spark at a
-16384 ceiling, only the model differs. DS4 wins by 9 points. Run 1's `hosted_vllm/`
-plumbing cost qwen ~2 points, not 11 — the gap is the model, not the transport.
-
-Run 3 caveat: client + transport + ceiling all differ from run 1, so trap scores
-are comparable there (same fixtures, same harness) but process metrics are not.
-Neither Cline run captured a turn count, so **points-per-turn — called the most
-important number above — does not exist for runs 3 or 4.**
-
-**Scoring method — settled 2026-08-11 with run 5. Use this one.**
+## Scoring method — settled 2026-08-11
 
 - **Part B is 11 requirements × 2 = 22, scored per requirement.** The `2b`/`4b`/`6b`
-  rows above are evidence *inside* their parent requirement, not extra cells —
+  rows are evidence *inside* their parent requirement, not extra cells —
   otherwise requirement 6 is worth 4 points when split and 2 when not.
 - **Part C is 6 rows × 1 = 6.** Total out of 28.
-- **Part A is a gate: pass/fail, never points.** Report it beside the score. Run 1's
-  published 13/28 could not be reproduced from its own tables because a ~7-point
-  gate penalty was folded in silently; that number is now 18/28 with **gate FAILED**
-  written next to it, which says the same thing and can be audited.
+- **Part A is a gate: pass/fail, never points.** Report it beside the score. A
+  gate penalty folded silently into the total hides the most important fact:
+  a high traps score on code that cannot read the specified input. Write
+  **gate FAILED** next to the score and let the two numbers say different things.
+- **Score the fixed expected values, not the model's tests.** A model that
+  writes a green suite around a wrong reading gets no credit for the suite.
 
-All four runs were restated on 2026-08-11; rankings did not change.
+## Recording your own results
 
-Harness note: **the probes have had to be rewritten for every run so far — budget
-for it.** Run 1's `probe2/3/4.py` call qwen's *internal* API (`find_matches`,
-`allocate_payment`, `CSVParser.parse_transaction_row`); `ds4-probe1..6.py` are
-black-box but assume DS4's module layout; run 4 needed `qc-probe1..3.py`. Only
-`score.py` and the fixtures genuinely port. Per-run checklist:
+This sheet deliberately publishes no ranking. Scores are specific to the weights,
+quantization, backend, context cap, and client you tested — so publish the run
+you measured:
 
-- Repoint **only** `CODE`. `PEEK` must keep pointing at the harness dir.
-- Expect a fresh `peekN.py`: table and column names differ every run
-  (run 1 `amount_minor` + a `match_summary` view, run 4 `matches.amount` /
-  `rates.rate`, DS4 no `matches` table at all — that last one is by design, not a
-  defect).
-- Check `main()`'s signature. Run 4's takes **no argv** and reads `sys.argv`
-  directly; a runner that passes a list fails in a way that looks like the app is
-  broken. `score4.py`'s `RUNNER` inspects the signature and handles both.
+| Run | Model + weights | Backend / client | Context cap | Temperature | Part B | Part C | Total | Gate |
+|---|---|---|---|---|---|---|---|---|
+| 1 | | | | | /22 | /6 | /28 | passed / failed |
+
+Add the process row from Part D beside it, and quote the failing check's
+evidence. Two comparisons worth keeping in mind:
+
+- **Noise floor.** Expect roughly 2 points of run-to-run spread on identical
+  weights and settings. Anything under that is not a difference.
+- **Points per turn, not points per minute.** Transports differ in whether
+  thinking blocks survive, and local decode speed varies enormously across
+  hardware and quantization. Record turns for every run so the number exists.
+
+## Harness notes
+
+**Budget for a fresh probe per run.** Table and column names differ every run
+(one run `amount_minor` plus a `match_summary` view, another `matches.amount` /
+`rates.rate`, another with no `matches` table at all — that last one is by
+design, not a defect). Only the scoring driver and the fixtures genuinely port.
+
+- Repoint the code path at the run being scored; keep probe helper imports in the
+  harness directory, not the run directory.
+- Check `main()`'s signature before scoring. One run's `main()` takes **no argv**
+  and reads `sys.argv` directly; a runner that passes a list fails in a way that
+  looks like the app is broken.
+- Prefer black-box probes (subprocess CLI calls) over importing the model's
+  internal API; internal probes have needed rewriting every run and can hide the
+  defects the fixtures exist to catch.
